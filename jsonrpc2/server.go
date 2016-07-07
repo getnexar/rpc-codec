@@ -11,6 +11,9 @@ import (
 	"io"
 	"net/rpc"
 	"sync"
+	"github.com/golang/protobuf/jsonpb"
+	"github.com/golang/protobuf/proto"
+	"bytes"
 )
 
 type serverCodec struct {
@@ -20,15 +23,15 @@ type serverCodec struct {
 	c        io.Closer
 	srv      *rpc.Server
 
-	// temporary work space
+												 // temporary work space
 	req serverRequest
 
-	// JSON-RPC clients can use arbitrary json values as request IDs.
-	// Package rpc expects uint64 request IDs.
-	// We assign uint64 sequence numbers to incoming requests
-	// but save the original request ID in the pending map.
-	// When rpc responds, we use the sequence number in
-	// the response to find the original request ID.
+												 // JSON-RPC clients can use arbitrary json values as request IDs.
+												 // Package rpc expects uint64 request IDs.
+												 // We assign uint64 sequence numbers to incoming requests
+												 // but save the original request ID in the pending map.
+												 // When rpc responds, we use the sequence number in
+												 // the response to find the original request ID.
 	mutex   sync.Mutex // protects seq, pending
 	seq     uint64
 	pending map[uint64]*json.RawMessage
@@ -177,7 +180,14 @@ func (c *serverCodec) ReadRequestBody(x interface{}) error {
 	if c.req.Params == nil {
 		return nil
 	}
-	if c.req.Method == "JSONRPC2.Batch" {
+	_, ok := x.(proto.Message)
+	// add support to protobuf
+	if (ok) {
+		unmarshaler := jsonpb.Unmarshaler{AllowUnknownFields: true}
+		if err := unmarshaler.Unmarshal(bytes.NewReader(*c.req.Params), x.(proto.Message)); err != nil {
+			return NewError(errParams.Code, err.Error())
+		}
+	} else if c.req.Method == "JSONRPC2.Batch" {
 		arg := x.(*BatchArg)
 		arg.srv = c.srv
 		if err := json.Unmarshal(*c.req.Params, &arg.reqs); err != nil {
@@ -199,6 +209,7 @@ func (c *serverCodec) WriteResponse(r *rpc.Response, x interface{}) error {
 	// In r.Error will be "" or .Error() of error returned by:
 	// - ReadRequestBody()
 	// - called RPC method
+
 	c.mutex.Lock()
 	b, ok := c.pending[r.Seq]
 	if !ok {
